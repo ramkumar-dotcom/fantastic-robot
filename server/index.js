@@ -10,10 +10,19 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    origin: '*',
     methods: ['GET', 'POST']
   },
-  transports: ['polling']
+  transports: ['polling'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  cookie: false,
+  // Disable connection state recovery to prevent session id unknown errors
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 0,
+    skipMiddlewares: true
+  }
 });
 
 app.use(cors());
