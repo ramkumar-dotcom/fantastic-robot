@@ -12,8 +12,10 @@ class SocketService {
       return this.socket;
     }
 
+
+    
     this.socket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling'],
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
