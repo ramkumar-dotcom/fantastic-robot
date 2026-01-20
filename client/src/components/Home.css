@@ -1,0 +1,303 @@
+* {
+  box-sizing: border-box;
+}
+
+.home {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow-x: hidden;
+}
+
+.home-container {
+  width: 100%;
+  max-width: 900px;
+}
+
+.hero {
+  text-align: center;
+  margin-bottom: 35px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.logo-icon {
+  font-size: 42px;
+}
+
+.logo h1 {
+  color: white;
+  font-size: 42px;
+  font-weight: 700;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.tagline {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 16px;
+  line-height: 1.6;
+  padding: 0 10px;
+}
+
+.cards-container {
+  display: flex;
+  gap: 25px;
+  align-items: center;
+  margin-bottom: 25px;
+}
+
+.action-card {
+  flex: 1;
+  background: white;
+  border-radius: 16px;
+  padding: 35px 25px;
+  text-align: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  min-width: 0;
+}
+
+.card-icon {
+  font-size: 42px;
+  margin-bottom: 12px;
+}
+
+.action-card h2 {
+  font-size: 22px;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.action-card p {
+  color: #666;
+  margin-bottom: 20px;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.divider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  width: 2px;
+  height: 25px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.divider span {
+  padding: 8px 0;
+}
+
+.room-input {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 16px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  text-align: center;
+  letter-spacing: 3px;
+  font-weight: 600;
+  transition: border-color 0.3s ease;
+}
+
+.room-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.room-input::placeholder {
+  letter-spacing: normal;
+  font-weight: 400;
+}
+
+.btn-large {
+  width: 100%;
+  padding: 14px 20px;
+  font-size: 16px;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.error-message {
+  background: #fff2f0;
+  border: 1px solid #ffccc7;
+  border-radius: 8px;
+  padding: 12px 16px;
+  color: #cf1322;
+  text-align: center;
+  margin-bottom: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 15px;
+}
+
+.feature {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  padding: 20px 15px;
+  text-align: center;
+  color: white;
+}
+
+.feature-icon {
+  font-size: 28px;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.feature h3 {
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.feature p {
+  font-size: 12px;
+  opacity: 0.9;
+  line-height: 1.4;
+}
+
+/* Tablet */
+@media (max-width: 768px) {
+  .home {
+    padding: 15px;
+    align-items: flex-start;
+    padding-top: 30px;
+  }
+
+  .hero {
+    margin-bottom: 25px;
+  }
+
+  .logo-icon {
+    font-size: 36px;
+  }
+
+  .logo h1 {
+    font-size: 32px;
+  }
+
+  .tagline {
+    font-size: 14px;
+  }
+
+  .cards-container {
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .action-card {
+    width: 100%;
+    padding: 30px 20px;
+  }
+
+  .card-icon {
+    font-size: 36px;
+  }
+
+  .action-card h2 {
+    font-size: 20px;
+  }
+
+  .divider {
+    flex-direction: row;
+    width: 100%;
+    padding: 5px 0;
+  }
+
+  .divider::before,
+  .divider::after {
+    width: 40px;
+    height: 2px;
+  }
+
+  .divider span {
+    padding: 0 12px;
+  }
+
+  .features {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .feature {
+    padding: 18px 15px;
+  }
+}
+
+/* Small mobile */
+@media (max-width: 400px) {
+  .home {
+    padding: 10px;
+    padding-top: 20px;
+  }
+
+  .logo h1 {
+    font-size: 28px;
+  }
+
+  .logo-icon {
+    font-size: 32px;
+  }
+
+  .action-card {
+    padding: 25px 15px;
+  }
+
+  .action-card h2 {
+    font-size: 18px;
+  }
+
+  .action-card p {
+    font-size: 13px;
+  }
+
+  .room-input {
+    font-size: 14px;
+    padding: 10px 14px;
+  }
+
+  .btn-large {
+    font-size: 14px;
+    padding: 12px 16px;
+  }
+}
