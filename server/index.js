@@ -1,36 +1,44 @@
 require('dotenv').config();
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  },
-  transports: ['polling'],
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  cookie: false,
-  // Disable connection state recovery to prevent session id unknown errors
-  connectionStateRecovery: {
-    maxDisconnectionDuration: 0,
-    skipMiddlewares: true
-  }
-});
 
 app.use(cors());
 app.use(express.json());
 
 // Store active rooms
-// { roomId: { hostSocketId, files: [], clients: [], activeDownloads: Map<fileId, Set<clientId>> } }
+// { roomId: { hostId, hostLastSeen, files: [], clients: Map<clientId, {lastSeen, signals: []}>, signals: [], activeDownloads: Map<fileId, Set<clientId>> } }
 const rooms = new Map();
+
+// Cleanup stale rooms and clients (older than 30 seconds)
+const STALE_TIMEOUT = 30000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of rooms) {
+    // Check if host is stale
+    if (now - room.hostLastSeen > STALE_TIMEOUT) {
+      console.log(`Room ${roomId} deleted - host timeout`);
+      rooms.delete(roomId);
+      continue;
+    }
+    // Check for stale clients
+    for (const [clientId, client] of room.clients) {
+      if (now - client.lastSeen > STALE_TIMEOUT) {
+        console.log(`Client ${clientId} removed - timeout`);
+        room.clients.delete(clientId);
+        // Clean up active downloads
+        for (const [fileId, downloaders] of room.activeDownloads) {
+          downloaders.delete(clientId);
+          if (downloaders.size === 0) {
+            room.activeDownloads.delete(fileId);
+          }
+        }
+      }
+    }
+  }
+}, 10000);
 
 // Helper to get download counts per file
 function getFileDownloadCounts(room) {
@@ -41,15 +49,6 @@ function getFileDownloadCounts(room) {
     }
   }
   return counts;
-}
-
-// Helper to notify host about peer counts
-function notifyHostPeerCounts(roomId) {
-  const room = rooms.get(roomId);
-  if (room && room.hostSocketId) {
-    const counts = getFileDownloadCounts(room);
-    io.to(room.hostSocketId).emit('peer-counts-updated', { counts });
-  }
 }
 
 // Health check endpoint
@@ -68,7 +67,7 @@ app.get('/api/rooms/:roomId', (req, res) => {
   const { roomId } = req.params;
   const room = rooms.get(roomId);
   
-  if (room && room.hostSocketId) {
+  if (room && room.hostId) {
     res.json({ 
       exists: true, 
       hasHost: true,
@@ -79,199 +78,248 @@ app.get('/api/rooms/:roomId', (req, res) => {
   }
 });
 
-io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
-
-  // Host creates/joins a room
-  socket.on('host-room', ({ roomId }) => {
-    console.log(`Host joining room: ${roomId}`);
-    
-    // Leave any previous rooms
-    socket.rooms.forEach(room => {
-      if (room !== socket.id) {
-        socket.leave(room);
-      }
-    });
-
-    socket.join(roomId);
-    
-    rooms.set(roomId, {
-      hostSocketId: socket.id,
+// Host registers/heartbeat
+app.post('/api/rooms/:roomId/host', (req, res) => {
+  const { roomId } = req.params;
+  const { hostId } = req.body;
+  
+  let room = rooms.get(roomId);
+  if (!room) {
+    room = {
+      hostId,
+      hostLastSeen: Date.now(),
       files: [],
-      clients: [],
-      activeDownloads: new Map() // fileId -> Set of clientIds
-    });
+      clients: new Map(),
+      hostSignals: [], // Signals for the host to receive
+      activeDownloads: new Map()
+    };
+    rooms.set(roomId, room);
+    console.log(`Room ${roomId} created by host ${hostId}`);
+  } else {
+    room.hostId = hostId;
+    room.hostLastSeen = Date.now();
+  }
+  
+  res.json({ success: true, roomId });
+});
 
-    socket.roomId = roomId;
-    socket.isHost = true;
-
-    socket.emit('room-created', { roomId });
-    console.log(`Room ${roomId} created by host ${socket.id}`);
-  });
-
-  // Host updates file list
-  socket.on('update-files', ({ roomId, files }) => {
-    const room = rooms.get(roomId);
-    if (room && room.hostSocketId === socket.id) {
-      room.files = files;
-      // Notify all clients in the room about new file list
-      socket.to(roomId).emit('files-updated', { files });
-      console.log(`Files updated in room ${roomId}:`, files.length, 'files');
-    }
-  });
-
-  // Client joins a room
-  socket.on('join-room', ({ roomId }) => {
-    console.log(`Client ${socket.id} attempting to join room: ${roomId}`);
-    
-    const room = rooms.get(roomId);
-    if (!room || !room.hostSocketId) {
-      socket.emit('room-error', { message: 'Room does not exist or host is offline' });
-      return;
-    }
-
-    socket.join(roomId);
-    socket.roomId = roomId;
-    socket.isHost = false;
-    socket.downloadingFiles = new Set(); // Track which files this client is downloading
-    room.clients.push(socket.id);
-
-    // Send current file list to the client
-    socket.emit('room-joined', { 
-      roomId, 
-      files: room.files 
-    });
-
-    // Notify host about new client
-    io.to(room.hostSocketId).emit('client-joined', { 
-      clientId: socket.id 
-    });
-
-    console.log(`Client ${socket.id} joined room ${roomId}`);
-  });
-
-  // WebRTC Signaling: Offer
-  socket.on('webrtc-offer', ({ targetId, offer, fileId }) => {
-    io.to(targetId).emit('webrtc-offer', {
-      senderId: socket.id,
-      offer,
-      fileId
-    });
-  });
-
-  // WebRTC Signaling: Answer
-  socket.on('webrtc-answer', ({ targetId, answer, fileId }) => {
-    io.to(targetId).emit('webrtc-answer', {
-      senderId: socket.id,
-      answer,
-      fileId
-    });
-  });
-
-  // WebRTC Signaling: ICE Candidate
-  socket.on('webrtc-ice-candidate', ({ targetId, candidate, fileId }) => {
-    io.to(targetId).emit('webrtc-ice-candidate', {
-      senderId: socket.id,
-      candidate,
-      fileId
-    });
-  });
-
-  // Client requests file download - track as active download
-  socket.on('request-file', ({ roomId, fileId }) => {
-    const room = rooms.get(roomId);
-    if (room && room.hostSocketId) {
-      console.log(`File request from ${socket.id} for file ${fileId}`);
-      
-      // Track this download
-      if (!room.activeDownloads.has(fileId)) {
-        room.activeDownloads.set(fileId, new Set());
-      }
-      room.activeDownloads.get(fileId).add(socket.id);
-      
-      // Track on socket for cleanup
-      if (!socket.downloadingFiles) {
-        socket.downloadingFiles = new Set();
-      }
-      socket.downloadingFiles.add(fileId);
-      
-      // Notify host about updated peer counts
-      notifyHostPeerCounts(roomId);
-      
-      // Forward request to host
-      io.to(room.hostSocketId).emit('file-requested', {
-        clientId: socket.id,
-        fileId
-      });
-    }
-  });
-
-  // Client finished downloading a file
-  socket.on('download-complete', ({ roomId, fileId }) => {
-    const room = rooms.get(roomId);
-    if (room) {
-      // Remove from active downloads
-      const clients = room.activeDownloads.get(fileId);
-      if (clients) {
-        clients.delete(socket.id);
-        if (clients.size === 0) {
-          room.activeDownloads.delete(fileId);
-        }
-      }
-      
-      // Remove from socket tracking
-      if (socket.downloadingFiles) {
-        socket.downloadingFiles.delete(fileId);
-      }
-      
-      // Notify host
-      notifyHostPeerCounts(roomId);
-      
-      console.log(`Download complete: ${socket.id} finished ${fileId}`);
-    }
-  });
-
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
-    
-    if (socket.isHost && socket.roomId) {
-      const room = rooms.get(socket.roomId);
-      if (room) {
-        socket.to(socket.roomId).emit('host-disconnected');
-        rooms.delete(socket.roomId);
-        console.log(`Room ${socket.roomId} deleted - host disconnected`);
-      }
-    } else if (socket.roomId) {
-      const room = rooms.get(socket.roomId);
-      if (room) {
-        room.clients = room.clients.filter(id => id !== socket.id);
-        
-        // Clean up any active downloads for this client
-        if (socket.downloadingFiles) {
-          for (const fileId of socket.downloadingFiles) {
-            const clients = room.activeDownloads.get(fileId);
-            if (clients) {
-              clients.delete(socket.id);
-              if (clients.size === 0) {
-                room.activeDownloads.delete(fileId);
-              }
-            }
-          }
-          // Notify host about updated counts
-          notifyHostPeerCounts(socket.roomId);
-        }
-        
-        // Notify host about client leaving
-        io.to(room.hostSocketId).emit('client-left', {
-          clientId: socket.id
-        });
-      }
-    }
+// Host polls for updates
+app.get('/api/rooms/:roomId/host/poll', (req, res) => {
+  const { roomId } = req.params;
+  const room = rooms.get(roomId);
+  
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  
+  room.hostLastSeen = Date.now();
+  
+  // Get signals for host and clear them
+  const signals = room.hostSignals || [];
+  room.hostSignals = [];
+  
+  // Get client count
+  const clientCount = room.clients.size;
+  
+  // Get peer counts
+  const peerCounts = getFileDownloadCounts(room);
+  
+  res.json({ 
+    signals, 
+    clientCount,
+    peerCounts,
+    clients: Array.from(room.clients.keys())
   });
 });
 
+// Host updates file list
+app.post('/api/rooms/:roomId/files', (req, res) => {
+  const { roomId } = req.params;
+  const { files } = req.body;
+  
+  const room = rooms.get(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  
+  room.files = files;
+  room.filesUpdatedAt = Date.now();
+  console.log(`Files updated in room ${roomId}:`, files.length, 'files');
+  
+  res.json({ success: true });
+});
+
+// Client joins room
+app.post('/api/rooms/:roomId/join', (req, res) => {
+  const { roomId } = req.params;
+  const { clientId } = req.body;
+  
+  const room = rooms.get(roomId);
+  if (!room || !room.hostId) {
+    return res.status(404).json({ error: 'Room not found or host offline' });
+  }
+  
+  if (!room.clients.has(clientId)) {
+    room.clients.set(clientId, {
+      lastSeen: Date.now(),
+      signals: [],
+      filesVersion: 0
+    });
+    console.log(`Client ${clientId} joined room ${roomId}`);
+  }
+  
+  res.json({ 
+    success: true, 
+    files: room.files,
+    hostOnline: true
+  });
+});
+
+// Client polls for updates
+app.get('/api/rooms/:roomId/client/:clientId/poll', (req, res) => {
+  const { roomId, clientId } = req.params;
+  
+  const room = rooms.get(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found', hostOnline: false });
+  }
+  
+  const client = room.clients.get(clientId);
+  if (!client) {
+    // Re-register client
+    room.clients.set(clientId, {
+      lastSeen: Date.now(),
+      signals: [],
+      filesVersion: 0
+    });
+  } else {
+    client.lastSeen = Date.now();
+  }
+  
+  // Check if host is still online
+  const hostOnline = (Date.now() - room.hostLastSeen) < STALE_TIMEOUT;
+  
+  // Get signals for this client and clear them
+  const signals = client ? (client.signals || []) : [];
+  if (client) client.signals = [];
+  
+  res.json({ 
+    signals, 
+    files: room.files,
+    hostOnline,
+    filesUpdatedAt: room.filesUpdatedAt || 0
+  });
+});
+
+// Send WebRTC signal (works for both host and client)
+app.post('/api/rooms/:roomId/signal', (req, res) => {
+  const { roomId } = req.params;
+  const { fromId, toId, type, data, fileId } = req.body;
+  
+  const room = rooms.get(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  
+  const signal = { fromId, type, data, fileId, timestamp: Date.now() };
+  
+  // If sending to host
+  if (toId === room.hostId || toId === 'host') {
+    room.hostSignals = room.hostSignals || [];
+    room.hostSignals.push(signal);
+  } else {
+    // Sending to a client
+    const client = room.clients.get(toId);
+    if (client) {
+      client.signals = client.signals || [];
+      client.signals.push(signal);
+    }
+  }
+  
+  res.json({ success: true });
+});
+
+// Client requests file download
+app.post('/api/rooms/:roomId/request-file', (req, res) => {
+  const { roomId } = req.params;
+  const { clientId, fileId } = req.body;
+  
+  const room = rooms.get(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  
+  // Track this download
+  if (!room.activeDownloads.has(fileId)) {
+    room.activeDownloads.set(fileId, new Set());
+  }
+  room.activeDownloads.get(fileId).add(clientId);
+  
+  // Add signal to host
+  room.hostSignals = room.hostSignals || [];
+  room.hostSignals.push({
+    type: 'file-request',
+    fromId: clientId,
+    fileId,
+    timestamp: Date.now()
+  });
+  
+  console.log(`File request from ${clientId} for file ${fileId}`);
+  res.json({ success: true });
+});
+
+// Client finished downloading
+app.post('/api/rooms/:roomId/download-complete', (req, res) => {
+  const { roomId } = req.params;
+  const { clientId, fileId } = req.body;
+  
+  const room = rooms.get(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  
+  // Remove from active downloads
+  const downloaders = room.activeDownloads.get(fileId);
+  if (downloaders) {
+    downloaders.delete(clientId);
+    if (downloaders.size === 0) {
+      room.activeDownloads.delete(fileId);
+    }
+  }
+  
+  console.log(`Download complete: ${clientId} finished ${fileId}`);
+  res.json({ success: true });
+});
+
+// Client leaves room
+app.post('/api/rooms/:roomId/leave', (req, res) => {
+  const { roomId } = req.params;
+  const { clientId } = req.body;
+  
+  const room = rooms.get(roomId);
+  if (room) {
+    room.clients.delete(clientId);
+    // Clean up active downloads
+    for (const [fileId, downloaders] of room.activeDownloads) {
+      downloaders.delete(clientId);
+      if (downloaders.size === 0) {
+        room.activeDownloads.delete(fileId);
+      }
+    }
+  }
+  
+  res.json({ success: true });
+});
+
+// Host leaves/closes room
+app.post('/api/rooms/:roomId/close', (req, res) => {
+  const { roomId } = req.params;
+  rooms.delete(roomId);
+  console.log(`Room ${roomId} closed`);
+  res.json({ success: true });
+});
+
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`🚀 P2P Share signaling server running on port ${PORT}`);
+app.listen(PORT, () => {
+  console.log(`🚀 P2P Share API server running on port ${PORT}`);
 });

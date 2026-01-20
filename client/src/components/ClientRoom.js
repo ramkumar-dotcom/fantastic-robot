@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import socketService from '../services/socket';
+import apiService from '../services/socket';
 import { WebRTCClient } from '../services/webrtc';
 import { formatFileSize, getFileIcon } from '../utils/fileUtils';
 import './ClientRoom.css';
@@ -54,49 +54,46 @@ function ClientRoom() {
   }, []);
 
   useEffect(() => {
-    const socket = socketService.connect();
-
-    socket.on('connect', () => {
+    // Setup event listeners
+    apiService.on('connect', () => {
       setIsConnected(true);
-      socket.emit('join-room', { roomId });
     });
 
-    socket.on('room-joined', ({ files: roomFiles }) => {
+    apiService.on('room-joined', ({ files: roomFiles }) => {
       setFiles(roomFiles || []);
       setHostOnline(true);
     });
 
-    socket.on('room-error', ({ message }) => {
+    apiService.on('room-error', ({ message }) => {
       setError(message);
       setHostOnline(false);
     });
 
-    socket.on('files-updated', ({ files: updatedFiles }) => {
+    apiService.on('files-updated', ({ files: updatedFiles }) => {
       setFiles(updatedFiles || []);
     });
 
-    socket.on('host-disconnected', () => {
+    apiService.on('host-disconnected', () => {
       setHostOnline(false);
       setError('Host has disconnected. Files are no longer available.');
     });
 
-    socket.on('disconnect', () => {
-      setIsConnected(false);
-    });
-
     // Initialize WebRTC client
     webrtcRef.current = new WebRTCClient(
-      socket,
+      apiService,
       handleProgress,
       handleComplete,
       handleError
     );
 
+    // Join the room
+    apiService.joinRoom(roomId);
+
     return () => {
       if (webrtcRef.current) {
         webrtcRef.current.cleanup();
       }
-      socketService.disconnect();
+      apiService.disconnect();
     };
   }, [roomId, handleProgress, handleComplete, handleError]);
 
@@ -109,7 +106,7 @@ function ClientRoom() {
     setDownloadProgress(prev => ({ ...prev, [fileId]: 0 }));
     
     if (webrtcRef.current) {
-      webrtcRef.current.requestFile(roomId, fileId);
+      webrtcRef.current.requestFile(fileId);
     }
   };
 
@@ -117,7 +114,7 @@ function ClientRoom() {
     if (webrtcRef.current) {
       webrtcRef.current.cleanup();
     }
-    socketService.disconnect();
+    apiService.disconnect();
     navigate('/');
   };
 

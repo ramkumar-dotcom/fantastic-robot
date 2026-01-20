@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import socketService from '../services/socket';
+import apiService from '../services/socket';
 import { WebRTCHost } from '../services/webrtc';
 import { formatFileSize, getFileIcon, processFiles, copyToClipboard } from '../utils/fileUtils';
 import './HostRoom.css';
@@ -11,7 +11,7 @@ function HostRoom() {
   const [isConnected, setIsConnected] = useState(false);
   const [files, setFiles] = useState([]);
   const [filesMap, setFilesMap] = useState(new Map());
-  const [clients, setClients] = useState([]);
+  const [clientCount, setClientCount] = useState(0);
   const [copied, setCopied] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [transferLog, setTransferLog] = useState([]);
@@ -28,51 +28,44 @@ function HostRoom() {
   }, []);
 
   useEffect(() => {
-    const socket = socketService.connect();
-    
-    socket.on('connect', () => {
+    // Setup event listeners
+    apiService.on('connect', () => {
       setIsConnected(true);
-      socket.emit('host-room', { roomId });
-      addToLog('Connected to signaling server', 'success');
+      addToLog('Connected to server', 'success');
     });
 
-    socket.on('room-created', ({ roomId: createdRoomId }) => {
+    apiService.on('room-created', ({ roomId: createdRoomId }) => {
       addToLog(`Room ${createdRoomId} created successfully`, 'success');
     });
 
-    socket.on('client-joined', ({ clientId }) => {
-      setClients(prev => [...prev, clientId]);
-      addToLog(`A user joined the room`, 'info');
+    apiService.on('client-count', ({ count }) => {
+      setClientCount(count);
     });
 
-    socket.on('client-left', ({ clientId }) => {
-      setClients(prev => prev.filter(id => id !== clientId));
-      addToLog(`A user left the room`, 'info');
-    });
-
-    // Listen for peer count updates
-    socket.on('peer-counts-updated', ({ counts }) => {
+    apiService.on('peer-counts-updated', ({ counts }) => {
       setPeerCounts(counts);
     });
 
-    socket.on('disconnect', () => {
+    apiService.on('connect_error', (error) => {
       setIsConnected(false);
-      addToLog('Disconnected from server', 'error');
+      addToLog('Connection error', 'error');
     });
+
+    // Host the room
+    apiService.hostRoom(roomId);
 
     return () => {
       if (webrtcRef.current) {
         webrtcRef.current.cleanup();
       }
-      socketService.disconnect();
+      apiService.disconnect();
     };
   }, [roomId, addToLog]);
 
   useEffect(() => {
     if (isConnected && filesMap.size > 0) {
-      const socket = socketService.getSocket();
       if (!webrtcRef.current) {
-        webrtcRef.current = new WebRTCHost(socket, filesMap);
+        webrtcRef.current = new WebRTCHost(apiService, filesMap);
       } else {
         webrtcRef.current.updateFiles(filesMap);
       }
@@ -98,7 +91,7 @@ function HostRoom() {
       type: f.type
     }));
     
-    socketService.emit('update-files', { roomId, files: allFiles });
+    apiService.updateFiles(allFiles);
     addToLog(`Added ${filesArray.length} file(s) for sharing`, 'success');
   };
 
@@ -144,7 +137,7 @@ function HostRoom() {
       type: f.type
     }));
     
-    socketService.emit('update-files', { roomId, files: updatedFiles });
+    apiService.updateFiles(updatedFiles);
     addToLog('File removed from sharing', 'info');
   };
 
@@ -160,7 +153,7 @@ function HostRoom() {
     if (webrtcRef.current) {
       webrtcRef.current.cleanup();
     }
-    socketService.disconnect();
+    apiService.disconnect();
     navigate('/');
   };
 
@@ -208,7 +201,7 @@ function HostRoom() {
           <div className="stats-section">
             <div className="stat-item">
               <span className="label">Users:</span>
-              <span className="count">{clients.length}</span>
+              <span className="count">{clientCount}</span>
             </div>
             <div className="stat-item">
               <span className="label">Downloads:</span>

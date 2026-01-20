@@ -158,15 +158,15 @@ class AdaptiveScheduler {
 const scheduler = new AdaptiveScheduler();
 
 export class WebRTCHost {
-  constructor(socket, files) {
-    this.socket = socket;
+  constructor(apiService, files) {
+    this.api = apiService;
     this.files = files;
     this.peerConnections = new Map();
-    this.setupSocketListeners();
+    this.setupListeners();
   }
 
-  setupSocketListeners() {
-    this.socket.on('webrtc-answer', async ({ senderId, answer, fileId }) => {
+  setupListeners() {
+    this.api.on('webrtc-answer', async ({ senderId, answer, fileId }) => {
       const key = `${senderId}-${fileId}`;
       const pc = this.peerConnections.get(key);
       if (pc) {
@@ -178,7 +178,7 @@ export class WebRTCHost {
       }
     });
 
-    this.socket.on('webrtc-ice-candidate', async ({ senderId, candidate, fileId }) => {
+    this.api.on('webrtc-ice-candidate', async ({ senderId, candidate, fileId }) => {
       const key = `${senderId}-${fileId}`;
       const pc = this.peerConnections.get(key);
       if (pc && candidate) {
@@ -190,7 +190,7 @@ export class WebRTCHost {
       }
     });
 
-    this.socket.on('file-requested', ({ clientId, fileId }) => {
+    this.api.on('file-requested', ({ clientId, fileId }) => {
       console.log(`File requested: ${fileId} by ${clientId}`);
       this.initiateFileTransfer(clientId, fileId);
     });
@@ -236,11 +236,7 @@ export class WebRTCHost {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        this.socket.emit('webrtc-ice-candidate', {
-          targetId: clientId,
-          candidate: event.candidate,
-          fileId
-        });
+        this.api.sendSignal(clientId, 'ice-candidate', event.candidate, fileId);
       }
     };
 
@@ -254,11 +250,7 @@ export class WebRTCHost {
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      this.socket.emit('webrtc-offer', {
-        targetId: clientId,
-        offer: pc.localDescription,
-        fileId
-      });
+      this.api.sendSignal(clientId, 'offer', pc.localDescription, fileId);
     } catch (error) {
       console.error('Error creating offer:', error);
     }
@@ -295,30 +287,29 @@ export class WebRTCHost {
     scheduler.cleanup();
     this.peerConnections.forEach(pc => pc.close());
     this.peerConnections.clear();
-    this.socket.off('webrtc-answer');
-    this.socket.off('webrtc-ice-candidate');
-    this.socket.off('file-requested');
+    this.api.off('webrtc-answer');
+    this.api.off('webrtc-ice-candidate');
+    this.api.off('file-requested');
   }
 }
 
 export class WebRTCClient {
-  constructor(socket, onProgress, onComplete, onError) {
-    this.socket = socket;
+  constructor(apiService, onProgress, onComplete, onError) {
+    this.api = apiService;
     this.onProgress = onProgress;
     this.onComplete = onComplete;
     this.onError = onError;
     this.peerConnections = new Map();
     this.fileBuffers = new Map();
-    this.currentRoomId = null; // Track room ID for download-complete notification
-    this.setupSocketListeners();
+    this.setupListeners();
   }
 
-  setupSocketListeners() {
-    this.socket.on('webrtc-offer', async ({ senderId, offer, fileId }) => {
+  setupListeners() {
+    this.api.on('webrtc-offer', async ({ senderId, offer, fileId }) => {
       await this.handleOffer(senderId, offer, fileId);
     });
 
-    this.socket.on('webrtc-ice-candidate', async ({ senderId, candidate, fileId }) => {
+    this.api.on('webrtc-ice-candidate', async ({ senderId, candidate, fileId }) => {
       const key = `${senderId}-${fileId}`;
       const pc = this.peerConnections.get(key);
       if (pc && candidate) {
@@ -359,11 +350,7 @@ export class WebRTCClient {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        this.socket.emit('webrtc-ice-candidate', {
-          targetId: hostId,
-          candidate: event.candidate,
-          fileId
-        });
+        this.api.sendSignal(hostId, 'ice-candidate', event.candidate, fileId);
       }
     };
 
@@ -371,11 +358,7 @@ export class WebRTCClient {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      this.socket.emit('webrtc-answer', {
-        targetId: hostId,
-        answer: pc.localDescription,
-        fileId
-      });
+      this.api.sendSignal(hostId, 'answer', pc.localDescription, fileId);
     } catch (error) {
       console.error('Error handling offer:', error);
       if (this.onError) this.onError(fileId, error);
@@ -436,26 +419,20 @@ export class WebRTCClient {
     this.fileBuffers.delete(fileId);
     
     // Notify server that download is complete
-    if (this.currentRoomId) {
-      this.socket.emit('download-complete', { 
-        roomId: this.currentRoomId, 
-        fileId 
-      });
-    }
+    this.api.downloadComplete(fileId);
     
     if (this.onComplete) this.onComplete(fileId, buffer.metadata.name);
   }
 
-  requestFile(roomId, fileId) {
-    this.currentRoomId = roomId; // Store roomId for download-complete
-    this.socket.emit('request-file', { roomId, fileId });
+  requestFile(fileId) {
+    this.api.requestFile(fileId);
   }
 
   cleanup() {
     this.peerConnections.forEach(pc => pc.close());
     this.peerConnections.clear();
     this.fileBuffers.clear();
-    this.socket.off('webrtc-offer');
-    this.socket.off('webrtc-ice-candidate');
+    this.api.off('webrtc-offer');
+    this.api.off('webrtc-ice-candidate');
   }
 }
