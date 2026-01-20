@@ -1,5 +1,5 @@
 const API_URL = process.env.REACT_APP_API_URL || 'http://192.168.1.6:3001';
-const POLL_INTERVAL = 5000; // 5 seconds
+const POLL_INTERVAL = 2000; // 2 seconds for faster signaling
 
 // Generate unique client ID
 function generateId() {
@@ -9,11 +9,13 @@ function generateId() {
 class ApiService {
   constructor() {
     this.clientId = generateId();
+    this.hostId = null;
     this.roomId = null;
     this.isHost = false;
     this.pollTimer = null;
     this.listeners = new Map();
     this.connected = false;
+    this.pollFn = null; // Store poll function for manual triggering
   }
 
   // Event emitter pattern
@@ -95,6 +97,7 @@ class ApiService {
         return false;
       }
       
+      this.hostId = result.hostId; // Store host ID for signaling
       this.connected = true;
       this.emit('connect', { id: this.clientId });
       this.emit('room-joined', { roomId, files: result.files });
@@ -144,6 +147,7 @@ class ApiService {
       }
     };
     
+    this.pollFn = poll; // Store for manual triggering
     poll(); // Initial poll
     this.pollTimer = setInterval(poll, POLL_INTERVAL);
   }
@@ -166,6 +170,11 @@ class ApiService {
           return;
         }
         
+        // Update hostId if provided
+        if (data.hostId) {
+          this.hostId = data.hostId;
+        }
+        
         // Process signals
         if (data.signals && data.signals.length > 0) {
           for (const signal of data.signals) {
@@ -184,6 +193,7 @@ class ApiService {
       }
     };
     
+    this.pollFn = poll; // Store for manual triggering
     poll(); // Initial poll
     this.pollTimer = setInterval(poll, POLL_INTERVAL);
   }
@@ -218,16 +228,20 @@ class ApiService {
   async sendSignal(toId, type, data, fileId) {
     if (!this.roomId) return;
     
-    await this.fetch(`/api/rooms/${this.roomId}/signal`, {
-      method: 'POST',
-      body: JSON.stringify({
-        fromId: this.clientId,
-        toId,
-        type,
-        data,
-        fileId
-      })
-    });
+    try {
+      await this.fetch(`/api/rooms/${this.roomId}/signal`, {
+        method: 'POST',
+        body: JSON.stringify({
+          fromId: this.clientId,
+          toId,
+          type,
+          data,
+          fileId
+        })
+      });
+    } catch (error) {
+      console.error('Error sending signal:', error);
+    }
   }
 
   // Update files (host only)
@@ -248,6 +262,18 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify({ clientId: this.clientId, fileId })
     });
+    
+    // Trigger immediate poll to get the offer faster
+    if (this.pollFn) {
+      setTimeout(() => this.pollFn(), 500);
+    }
+  }
+  
+  // Trigger an immediate poll
+  triggerPoll() {
+    if (this.pollFn) {
+      this.pollFn();
+    }
   }
 
   // Notify download complete
@@ -280,12 +306,19 @@ class ApiService {
     }
     
     this.roomId = null;
+    this.hostId = null;
+    this.isHost = false;
     this.connected = false;
+    this.pollFn = null;
     this.listeners.clear();
   }
 
   getId() {
     return this.clientId;
+  }
+
+  getHostId() {
+    return this.hostId;
   }
 
   isConnected() {

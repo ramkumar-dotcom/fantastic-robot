@@ -166,11 +166,14 @@ app.post('/api/rooms/:roomId/join', (req, res) => {
       filesVersion: 0
     });
     console.log(`Client ${clientId} joined room ${roomId}`);
+  } else {
+    room.clients.get(clientId).lastSeen = Date.now();
   }
   
   res.json({ 
     success: true, 
     files: room.files,
+    hostId: room.hostId,
     hostOnline: true
   });
 });
@@ -184,14 +187,16 @@ app.get('/api/rooms/:roomId/client/:clientId/poll', (req, res) => {
     return res.status(404).json({ error: 'Room not found', hostOnline: false });
   }
   
-  const client = room.clients.get(clientId);
+  let client = room.clients.get(clientId);
   if (!client) {
     // Re-register client
-    room.clients.set(clientId, {
+    client = {
       lastSeen: Date.now(),
       signals: [],
       filesVersion: 0
-    });
+    };
+    room.clients.set(clientId, client);
+    console.log(`Client ${clientId} re-registered in room ${roomId}`);
   } else {
     client.lastSeen = Date.now();
   }
@@ -200,13 +205,14 @@ app.get('/api/rooms/:roomId/client/:clientId/poll', (req, res) => {
   const hostOnline = (Date.now() - room.hostLastSeen) < STALE_TIMEOUT;
   
   // Get signals for this client and clear them
-  const signals = client ? (client.signals || []) : [];
-  if (client) client.signals = [];
+  const signals = client.signals || [];
+  client.signals = [];
   
   res.json({ 
     signals, 
     files: room.files,
     hostOnline,
+    hostId: room.hostId, // Send hostId so client knows who to send signals to
     filesUpdatedAt: room.filesUpdatedAt || 0
   });
 });
